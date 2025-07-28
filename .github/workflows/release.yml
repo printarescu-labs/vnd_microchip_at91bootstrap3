@@ -34,7 +34,7 @@ jobs:
         with:
 
           name: ${{ matrix.target }}_${{ matrix.medium }}.bin
-          path: binaries/boot.bin
+          path: binaries/${{ matrix.target }}-${{ matrix.medium }}-boot.bin
   create-release:
     needs: build-configs
     runs-on: ubuntu-latest

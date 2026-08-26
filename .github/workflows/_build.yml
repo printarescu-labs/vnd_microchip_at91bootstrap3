@@ -1,0 +1,225 @@
+name: Build (reusable)
+
+# Reusable build/matrix/manifest/release workflow. Not triggered directly --
+# called by dev-builds.yml and release.yml so they can't diverge again the
+# way the old two hand-maintained copies did.
+
+on:
+  workflow_call:
+    inputs:
+      profiles:
+        description: 'JSON array of build profiles to produce, e.g. ["dev"] or ["release","dev"]'
+        required: true
+        type: string
+      create_release:
+        description: 'Whether to publish a GitHub Release with the built artifacts'
+        required: true
+        type: boolean
+      retention_days:
+        description: 'Artifact retention period in days'
+        required: false
+        type: number
+        default: 7
+
+# Deliberately no toolchain version bump alongside this pipeline rework: the
+# arm-none-eabi-gcc release stays pinned to what was already validated
+# against this project's SRAM size budget (see Makefile's ChkFileSize). A
+# compiler bump is a separate, independently-verified change.
+env:
+  ARM_GCC_RELEASE: '14.2.Rel1'
+
+jobs:
+  discover:
+    name: Discover board/medium/profile matrix
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.discover.outputs.matrix }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7.0.1
+
+      - name: Generate matrix from contrib/board/vd-rd
+        id: discover
+        run: |
+          matrix=$(scripts/gen_ci_matrix.sh '${{ inputs.profiles }}')
+          echo "Discovered matrix: $matrix"
+          if [ "$matrix" = "[]" ]; then
+            echo "::error::No (board, medium) pairs discovered under contrib/board/vd-rd -- refusing to run an empty build matrix"
+            exit 1
+          fi
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: ${{ matrix.board }} / ${{ matrix.medium }} / ${{ matrix.profile }}
+    needs: discover
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.discover.outputs.matrix) }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0 # need tags/history for `git describe`
+
+      - name: Set up ARM GNU Toolchain
+        uses: carlosperate/arm-none-eabi-gcc-action@v1.13.0
+        with:
+          release: ${{ env.ARM_GCC_RELEASE }}
+
+      - name: Resolve version
+        id: version
+        run: echo "version=$(git describe --tags --always --dirty)" >> "$GITHUB_OUTPUT"
+
+      - name: Configure ${{ matrix.board }}${{ matrix.medium }}
+        run: make CROSS_COMPILE=arm-none-eabi- ${{ matrix.board }}${{ matrix.medium }}_uboot_defconfig
+
+      - name: Enable verbose debug output (dev profile)
+        if: matrix.profile == 'dev'
+        run: scripts/enable_debug_config.sh
+
+      - name: Build
+        run: make VERSION=${{ steps.version.outputs.version }} CROSS_COMPILE=arm-none-eabi- -j"$(nproc)"
+
+      - name: Package artifact
+        id: artifact
+        run: |
+          set -eu
+          board='${{ matrix.board }}'
+          medium='${{ matrix.medium }}'
+          profile='${{ matrix.profile }}'
+          version='${{ steps.version.outputs.version }}'
+          src="binaries/${board}-${medium}-boot.bin"
+          name="${board}-${medium}-${profile}-boot-${version}.bin"
+
+          if [ ! -f "$src" ]; then
+            echo "::error::Expected build output $src not found"
+            exit 1
+          fi
+
+          cp "$src" "binaries/$name"
+          ( cd binaries && sha256sum "$name" > "$name.sha256" )
+          sha256=$(cut -d' ' -f1 "binaries/$name.sha256")
+
+          size_bytes=$(stat -c%s "binaries/$name")
+          max_bytes=$(grep '^CONFIG_BOOTSTRAP_MAXSIZE=' .config | cut -d'"' -f2)
+          percent_used=$(awk -v s="$size_bytes" -v m="$max_bytes" 'BEGIN{printf "%.1f", (s/m)*100}')
+
+          jq -n \
+            --arg board "$board" --arg medium "$medium" --arg profile "$profile" \
+            --arg filename "$name" --arg sha256 "$sha256" \
+            --arg version "$version" --arg commit "${{ github.sha }}" \
+            --argjson size_bytes "$size_bytes" --argjson max_bytes "$max_bytes" \
+            --argjson percent_used "$percent_used" \
+            '{board:$board,medium:$medium,profile:$profile,filename:$filename,sha256:$sha256,version:$version,commit:$commit,size_bytes:$size_bytes,max_bytes:$max_bytes,percent_used:$percent_used}' \
+            > "binaries/$name.meta.json"
+
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: ${{ steps.artifact.outputs.name }}
+          path: binaries/${{ steps.artifact.outputs.name }}
+          archive: false # publish the raw .bin, not a zip wrapper
+          retention-days: ${{ inputs.retention_days }}
+
+      - name: Upload checksum + metadata
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: ${{ steps.artifact.outputs.name }}-meta
+          path: |
+            binaries/${{ steps.artifact.outputs.name }}.sha256
+            binaries/${{ steps.artifact.outputs.name }}.meta.json
+          retention-days: ${{ inputs.retention_days }}
+
+  manifest:
+    name: Build manifest.json
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all metadata
+        uses: actions/download-artifact@v8.0.1
+        with:
+          pattern: '*-meta'
+          path: artifacts
+          merge-multiple: true
+
+      - name: Aggregate manifest.json + sha256sums.txt
+        run: |
+          set -eu
+          built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          jq -s --arg built_at "$built_at" 'map(. + {built_at:$built_at})' \
+            artifacts/*.meta.json > manifest.json
+          cat artifacts/*.sha256 > sha256sums.txt
+          echo "Manifest contents:"
+          cat manifest.json
+
+      - name: Write build summary
+        run: |
+          {
+            echo "### Build summary"
+            echo
+            echo "| Board | Medium | Profile | Version | Size | Budget | Used |"
+            echo "|---|---|---|---|---|---|---|"
+            jq -r '.[] | "| \(.board) | \(.medium) | \(.profile) | \(.version) | \(.size_bytes) B | \(.max_bytes) B | \(.percent_used)% |"' manifest.json
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload manifest
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: manifest
+          path: |
+            manifest.json
+            sha256sums.txt
+          retention-days: ${{ inputs.retention_days }}
+
+  release:
+    name: Publish GitHub Release
+    if: inputs.create_release
+    needs: [build, manifest]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      # Binary artifacts are named exactly "<...>.bin"; the checksum/metadata
+      # sidecar artifacts are named "<...>.bin-meta". Both contain "-boot-",
+      # so that alone isn't a safe filter -- match on the ".bin" suffix
+      # instead to pull in only the actual binaries here.
+      - name: Download binaries
+        uses: actions/download-artifact@v8.0.1
+        with:
+          pattern: '*.bin'
+          path: release-assets
+          merge-multiple: true
+
+      - name: Download checksums
+        uses: actions/download-artifact@v8.0.1
+        with:
+          pattern: '*-meta'
+          path: release-assets
+          merge-multiple: true
+
+      - name: Download manifest
+        uses: actions/download-artifact@v8.0.1
+        with:
+          name: manifest
+          path: release-assets
+
+      - name: Drop redundant per-artifact metadata sidecars
+        # manifest.json (from the manifest job) already aggregates every
+        # per-artifact *.meta.json -- publishing both is pure clutter.
+        run: rm -f release-assets/*.meta.json
+
+      # TODO(coordinator-repo): once a version-pinning coordinator repo
+      # exists, fire a repository_dispatch event here with
+      # release-assets/manifest.json as the payload so it can open a
+      # human-reviewed version-bump PR. No target repo exists yet, so this
+      # is intentionally left unwired rather than pointed at nothing.
+
+      - name: Create release
+        uses: softprops/action-gh-release@v3.0.2
+        with:
+          files: |
+            release-assets/*

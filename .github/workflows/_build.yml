@@ -137,6 +137,7 @@ jobs:
   manifest:
     name: Build manifest.json
     needs: build
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
       - name: Download all metadata
@@ -149,10 +150,18 @@ jobs:
       - name: Aggregate manifest.json + sha256sums.txt
         run: |
           set -eu
-          built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          jq -s --arg built_at "$built_at" 'map(. + {built_at:$built_at})' \
-            artifacts/*.meta.json > manifest.json
-          cat artifacts/*.sha256 > sha256sums.txt
+          shopt -s nullglob
+          metas=(artifacts/*.meta.json)
+          if [ ${#metas[@]} -eq 0 ]; then
+            echo "::warning::No successful builds to summarize"
+            echo "[]" > manifest.json
+            : > sha256sums.txt
+          else
+            built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+            jq -s --arg built_at "$built_at" 'map(. + {built_at:$built_at})' \
+              "${metas[@]}" > manifest.json
+            cat artifacts/*.sha256 > sha256sums.txt
+          fi
           echo "Manifest contents:"
           cat manifest.json
 
@@ -177,7 +186,7 @@ jobs:
 
   release:
     name: Publish GitHub Release
-    if: inputs.create_release
+    if: ${{ inputs.create_release && !cancelled() }}
     needs: [build, manifest]
     runs-on: ubuntu-latest
     permissions:

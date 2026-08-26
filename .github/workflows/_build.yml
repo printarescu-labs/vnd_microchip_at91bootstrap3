@@ -30,7 +30,7 @@ env:
 
 jobs:
   discover:
-    name: Discover board/medium/profile matrix
+    name: Gather targets
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.discover.outputs.matrix }}
@@ -50,7 +50,7 @@ jobs:
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
 
   build:
-    name: ${{ matrix.board }} / ${{ matrix.medium }} / ${{ matrix.profile }}
+    name: ${{ matrix.board }}-${{ matrix.medium }}-${{ matrix.profile }}
     needs: discover
     runs-on: ubuntu-latest
     strategy:
@@ -91,7 +91,7 @@ jobs:
           profile='${{ matrix.profile }}'
           version='${{ steps.version.outputs.version }}'
           src="binaries/${board}-${medium}-boot.bin"
-          name="${board}-${medium}-${profile}-boot-${version}.bin"
+          name="${board}-${medium}-${profile}.bin"
 
           if [ ! -f "$src" ]; then
             echo "::error::Expected build output $src not found"

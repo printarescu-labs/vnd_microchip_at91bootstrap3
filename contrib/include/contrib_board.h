@@ -81,4 +81,8 @@
 #include "glasnost_m9g20.h"
 #endif
 
+#ifdef CONFIG_GLASNOST_SAM9X5
+#include "glasnost_sam9x5.h"
+#endif
+
 #endif

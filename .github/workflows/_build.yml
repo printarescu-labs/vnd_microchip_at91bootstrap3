@@ -3,11 +3,6 @@ name: Build (reusable)
 # Reusable build/matrix/manifest/release workflow. Not triggered directly --
 # called by dev-builds.yml and release.yml so they can't diverge again the
 # way the old two hand-maintained copies did.
-#
-# All third-party and GitHub-owned actions below are pinned to a full commit
-# SHA (not a floating tag) as a supply-chain-integrity measure: this workflow
-# builds boot firmware and, on release, holds `contents: write`, so a
-# retargeted tag on any dependency is a real risk, not a theoretical one.
 
 on:
   workflow_call:
@@ -41,7 +36,7 @@ jobs:
       matrix: ${{ steps.discover.outputs.matrix }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7.0.1
 
       - name: Generate matrix from contrib/board/vd-rd
         id: discover
@@ -64,12 +59,12 @@ jobs:
         include: ${{ fromJson(needs.discover.outputs.matrix) }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0 # need tags/history for `git describe`
 
       - name: Set up ARM GNU Toolchain
-        uses: carlosperate/arm-none-eabi-gcc-action@98c40e51546516419841748d3210c290df0d2c6c # v1.13.0
+        uses: carlosperate/arm-none-eabi-gcc-action@v1.13.0
         with:
           release: ${{ env.ARM_GCC_RELEASE }}
 
@@ -107,17 +102,23 @@ jobs:
           ( cd binaries && sha256sum "$name" > "$name.sha256" )
           sha256=$(cut -d' ' -f1 "binaries/$name.sha256")
 
+          size_bytes=$(stat -c%s "binaries/$name")
+          max_bytes=$(grep '^CONFIG_BOOTSTRAP_MAXSIZE=' .config | cut -d'"' -f2)
+          percent_used=$(awk -v s="$size_bytes" -v m="$max_bytes" 'BEGIN{printf "%.1f", (s/m)*100}')
+
           jq -n \
             --arg board "$board" --arg medium "$medium" --arg profile "$profile" \
             --arg filename "$name" --arg sha256 "$sha256" \
             --arg version "$version" --arg commit "${{ github.sha }}" \
-            '{board:$board,medium:$medium,profile:$profile,filename:$filename,sha256:$sha256,version:$version,commit:$commit}' \
+            --argjson size_bytes "$size_bytes" --argjson max_bytes "$max_bytes" \
+            --argjson percent_used "$percent_used" \
+            '{board:$board,medium:$medium,profile:$profile,filename:$filename,sha256:$sha256,version:$version,commit:$commit,size_bytes:$size_bytes,max_bytes:$max_bytes,percent_used:$percent_used}' \
             > "binaries/$name.meta.json"
 
           echo "name=$name" >> "$GITHUB_OUTPUT"
 
       - name: Upload binary
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: ${{ steps.artifact.outputs.name }}
           path: binaries/${{ steps.artifact.outputs.name }}
@@ -125,7 +126,7 @@ jobs:
           retention-days: ${{ inputs.retention_days }}
 
       - name: Upload checksum + metadata
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: ${{ steps.artifact.outputs.name }}-meta
           path: |
@@ -139,7 +140,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download all metadata
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@v8.0.1
         with:
           pattern: '*-meta'
           path: artifacts
@@ -155,8 +156,18 @@ jobs:
           echo "Manifest contents:"
           cat manifest.json
 
+      - name: Write build summary
+        run: |
+          {
+            echo "### Build summary"
+            echo
+            echo "| Board | Medium | Profile | Version | Size | Budget | Used |"
+            echo "|---|---|---|---|---|---|---|"
+            jq -r '.[] | "| \(.board) | \(.medium) | \(.profile) | \(.version) | \(.size_bytes) B | \(.max_bytes) B | \(.percent_used)% |"' manifest.json
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload manifest
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: manifest
           path: |
@@ -177,21 +188,21 @@ jobs:
       # so that alone isn't a safe filter -- match on the ".bin" suffix
       # instead to pull in only the actual binaries here.
       - name: Download binaries
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@v8.0.1
         with:
           pattern: '*.bin'
           path: release-assets
           merge-multiple: true
 
       - name: Download checksums
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@v8.0.1
         with:
           pattern: '*-meta'
           path: release-assets
           merge-multiple: true
 
       - name: Download manifest
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@v8.0.1
         with:
           name: manifest
           path: release-assets
@@ -208,7 +219,7 @@ jobs:
       # is intentionally left unwired rather than pointed at nothing.
 
       - name: Create release
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        uses: softprops/action-gh-release@v3.0.2
         with:
           files: |
             release-assets/*

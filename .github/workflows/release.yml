@@ -12,8 +12,6 @@ jobs:
   build:
     uses: ./.github/workflows/_build.yml
     with:
-      # A tagged release publishes both the stripped official binary and a
-      # debug variant of that exact version, useful for field debugging.
-      profiles: '["release","dev"]'
+      profiles: '["release"]'
       create_release: true
       retention_days: 90

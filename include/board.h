@@ -153,6 +153,8 @@ extern void norflash_hw_init(void);
 
 extern char *board_override_cmd_line(void);
 
+extern void board_boot_error_indication(void);
+
 /* PM Support */
 extern unsigned int at91_twi0_hw_init(void);
 extern unsigned int at91_twi1_hw_init(void);

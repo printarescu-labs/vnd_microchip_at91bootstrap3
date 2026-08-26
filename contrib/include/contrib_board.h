@@ -73,4 +73,8 @@
 #include "glasnost_m9g10.h"
 #endif
 
+#ifdef CONFIG_GLASNOST_M9260
+#include "glasnost_m9260.h"
+#endif
+
 #endif

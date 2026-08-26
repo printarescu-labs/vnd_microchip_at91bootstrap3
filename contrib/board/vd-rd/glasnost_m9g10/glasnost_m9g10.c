@@ -121,11 +121,34 @@ static void sdramc_init(void)
 	sdramc_initialize(&sdramc_config, AT91C_BASE_CS1);
 }
 
+#define LED_BLUE_MASK	(0x01 << 26)
+#define LED_GREEN_MASK	(0x01 << 28)
+#define LED_RED_MASK	(0x01 << 29)
+#define LED_ALL_MASK	(LED_BLUE_MASK | LED_GREEN_MASK | LED_RED_MASK)
+
+static void leds_init(void)
+{
+	pmc_enable_periph_clock(AT91C_ID_PIOA, PMC_PERIPH_CLK_DIVIDER_NA);
+
+	writel(LED_ALL_MASK, AT91C_BASE_PIOA + PIO_SODR);
+	writel(LED_ALL_MASK, AT91C_BASE_PIOA + PIO_OER);
+	writel(LED_ALL_MASK, AT91C_BASE_PIOA + PIO_PER);
+
+	writel(LED_BLUE_MASK, AT91C_BASE_PIOA + PIO_CODR);
+}
+
+void board_boot_error_indication(void)
+{
+	writel(LED_RED_MASK | LED_BLUE_MASK, AT91C_BASE_PIOA + PIO_CODR);
+}
+
 #ifdef CONFIG_HW_INIT
 void hw_init(void)
 {
 	/* Disable watchdog */
 	at91_disable_wdt();
+
+	leds_init();
 
 	/*
 	 * At this stage the main oscillator is supposed to be enabled

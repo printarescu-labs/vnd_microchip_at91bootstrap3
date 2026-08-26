@@ -26,6 +26,7 @@
  * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 #include "common.h"
+#include "board.h"
 #include "dataflash.h"
 #include "nandflash.h"
 #include "sdcard.h"
@@ -123,6 +124,10 @@ void init_load_image(struct image_info *image)
 }
 #endif
 
+__attribute__((weak)) void board_boot_error_indication(void)
+{
+}
+
 void load_image_done(int retval)
 {
 	char *media;
@@ -153,6 +158,7 @@ void load_image_done(int retval)
 	}
 	if (retval == -1) {
 		usart_puts("Failed to load image\n");
+		board_boot_error_indication();
 		while(1);
 	}
 	if (retval == -2) {

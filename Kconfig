@@ -12,6 +12,8 @@ source "driver/Config.in.driver"
 
 config PROJECT
 	string
+	# glasnost boards use "nor" instead of "df" for CI/build-output naming only
+	default "nor"		if DATAFLASH && (GLASNOST_M9260 || GLASNOST_M9G20 || GLASNOST_SAM9X5)
 	default "df"		if DATAFLASH
 	default "fl"		if FLASH
 	default "nandflash"	if NANDFLASH

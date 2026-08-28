@@ -221,11 +221,23 @@ jobs:
         # per-artifact *.meta.json -- publishing both is pure clutter.
         run: rm -f release-assets/*.meta.json
 
-      # TODO(coordinator-repo): once a version-pinning coordinator repo
-      # exists, fire a repository_dispatch event here with
-      # release-assets/manifest.json as the payload so it can open a
-      # human-reviewed version-bump PR. No target repo exists yet, so this
-      # is intentionally left unwired rather than pointed at nothing.
+      # Requires repo secret GLASNOST_DISPATCH_TOKEN (not yet created) --
+      # GITHUB_TOKEN can't dispatch cross-repo.
+      - name: Notify glasnost-distro-packer of this release
+        env:
+          GH_TOKEN: ${{ secrets.GLASNOST_DISPATCH_TOKEN }}
+        run: |
+          set -eu
+          ref=$(jq -r '.[0].version' release-assets/manifest.json)
+          payload=$(jq -n \
+            --arg repo "printarescu-labs/vnd_microchip_at91bootstrap3" \
+            --arg ref "$ref" \
+            '{event_type: "component-released", client_payload: {repo: $repo, ref: $ref}}')
+          echo "$payload" | gh api \
+            --method POST \
+            -H "Accept: application/vnd.github+json" \
+            /repos/printarescu-labs/glasnost-distro-packer/dispatches \
+            --input -
 
       - name: Create release
         uses: softprops/action-gh-release@v3.0.2
